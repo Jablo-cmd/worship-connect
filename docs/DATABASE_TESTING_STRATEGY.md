@@ -283,6 +283,7 @@ Run against the real Storage API of the local stack using real sessions.
 | FIL-01 | `judy` requests/reads A's object by exact path and by guessed path/UUID; signed-URL request for A's file | denied (indistinguishable from not-found) |
 | FIL-02 | `dan` reads a file attached to a message in a conversation he is **not** in; to a private channel; to a DM between others | denied |
 | FIL-03 | `dan` reads a file attached to a message in a channel he can access | allowed (positive twin) |
+| FIL-03b | Owner and Admin (both hold `files.manage`) download/list a **DM attachment** and an **unattached** file uploaded by another member | denied; `files.manage` is delete/quarantine only (found by a failing test on Supabase) |
 | FIL-04 | Song resource with `access_scope='leaders'`: `dan` denied, `alice` allowed; `'assigned_members'`: assigned `dan` allowed, unassigned `erin` denied | as stated |
 | FIL-05 | Suspended `felix`, removed `grace`, pending `heidi` | denied for every file incl. their own earlier uploads |
 | FIL-06 | Upload without prior `register_file` (arbitrary path); to path with another org's prefix; with mismatched `file_id`; with another user's pending row; overwrite existing object (`upsert`) | rejected |

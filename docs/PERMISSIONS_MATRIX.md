@@ -122,7 +122,7 @@ Scope key: **O** organisation · **C** campus · **M** ministry · **D** departm
 | `reports.view` | O C M D T | ✔ | Run reports (attendance, participation, task completion, usage) over members in scope. |
 | `reports.export` | O C | ✔ | Export report data to a file (audited). |
 | `audit.view` | O | ✔ | Read the organisation's audit log. |
-| `files.manage` | O | | Review and delete files uploaded by others (e.g. policy violations). |
+| `files.manage` | O | | Delete or quarantine files uploaded by others (e.g. policy violations) through `delete_file`. **Grants no read or list access** to file content or filenames: it cannot open a DM attachment or an unattached file (verified on Supabase; an earlier draft let it, which leaked private attachments). |
 
 **Total: 45 permissions.**
 
