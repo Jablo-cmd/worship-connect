@@ -102,7 +102,11 @@ select is((select count(*) from (values ('public','audit_events'),('public','mem
            where not exists (select 1 from pg_trigger g join pg_proc f on f.oid=g.tgfoid where g.tgrelid=format('%I.%I', v.s, v.t)::regclass and f.proname='block_mutation' and not g.tgisinternal)), 0::bigint, 'CAT-15 append-only tables have the block-mutation trigger');
 
 -- CAT-16 no secret-looking column is readable by clients (audit_events.client_ip_hash is a keyed hash of an IP, readable by audit.view by design)
-select is((select count(*) from information_schema.columns c where c.table_schema='public' and c.column_name ~ '(hash|secret|token|password)' and c.column_name <> 'client_ip_hash' and has_column_privilege('authenticated', format('public.%I', c.table_name)::regclass, c.column_name, 'select')), 0::bigint, 'CAT-16 no secret-like column is selectable by authenticated');
+select is((select count(*) from pg_attribute a join pg_class t on t.oid = a.attrelid join pg_namespace n on n.oid = t.relnamespace
+           where n.nspname = 'public' and t.relkind in ('r','p','v') and a.attnum > 0 and not a.attisdropped
+             and a.attname ~ '(hash|secret|token|password)' and a.attname <> 'client_ip_hash'
+             and not exists (select 1 from pg_depend d where d.objid = t.oid and d.deptype = 'e')      -- ignore objects that belong to extensions (e.g. pgTAP installed in public by the CLI)
+             and has_column_privilege('authenticated', t.oid, a.attnum, 'select')), 0::bigint, 'CAT-16 no secret-like column is selectable by authenticated');
 
 -- CAT-17 naming conventions
 select is((select count(*) from information_schema.columns where table_schema in ('public','platform') and (column_name !~ '^[a-z][a-z0-9_]*$')), 0::bigint, 'CAT-17 columns are lower_snake_case');
