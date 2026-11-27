@@ -255,12 +255,12 @@ Each produces a short written result appended to this plan (or `DECISIONS.md`). 
 
 | Spike | Status | Result |
 |---|---|---|
-| **S-1** Extensions | **Partial** | `pgcrypto`, `citext`, `pg_trgm`, `btree_gist` install and work on PG 16. `pg_partman`, `pg_cron`, `pgtap` were **not** available in this build. **Availability on the Supabase tier is unverified.** The spec's partition maintenance must not depend on `pg_partman` until confirmed (a plain SQL function + scheduler is sufficient). |
-| **S-2** Realtime private channels | **Not run** | Needs the Supabase stack. D-035 stays *Proposed*. |
-| **S-3** Storage policies | **Not run** | Needs the Supabase stack. |
+| **S-1** Extensions | **Done on Supabase (see §9.1); SQL-level notes kept** | `pgcrypto`, `citext`, `pg_trgm`, `btree_gist` install and work on PG 16. `pg_partman`, `pg_cron`, `pgtap` were **not** available in this build. **Availability on the Supabase tier is unverified.** The spec's partition maintenance must not depend on `pg_partman` until confirmed (a plain SQL function + scheduler is sufficient). |
+| **S-2** Realtime private channels | **Done on Supabase (§9.1)** | Behaves as specified; D-035 supported. |
+| **S-3** Storage policies | **Done on Supabase (§9.1)** | One real spec bug found and fixed (`files.manage`). |
 | **S-4** RLS performance | **Done at SQL level; spec changed** | See below. |
-| **S-5** Column privileges | **Done at SQL level; spec changed** | See below. PostgREST behaviour still unverified. |
-| **S-6** Atomic `create_organisation` | **Done (SQL level)** | A `SECURITY DEFINER` function inserting organisation + settings + membership + role assignment and then raising rolled back **all** rows (0 leaked); success path committed all; `anon` got `permission denied for function`. Through PostgREST/`auth.users` still to confirm on Supabase. |
+| **S-5** Column privileges | **Done; spec changed** | See below and §9.1 (PostgREST behaviour confirmed). |
+| **S-6** Atomic `create_organisation` | **Done (SQL level + through the real API)** | A `SECURITY DEFINER` function inserting organisation + settings + membership + role assignment and then raising rolled back **all** rows (0 leaked); success path committed all; `anon` got `permission denied for function`. Through PostgREST/`auth.users` still to confirm on Supabase. |
 | **S-7** Time zones / DST | **Done; spec changed** | See below. |
 | **S-8** MFA `aal2` claim | **Not run** | Needs Supabase Auth. |
 | **S-9** Branching / CI flow | **Not run** | Needs Supabase tooling. |
@@ -304,5 +304,38 @@ Each produces a short written result appended to this plan (or `DECISIONS.md`). 
 | `DEFERRABLE INITIALLY DEFERRED` unique position | Swapping two positions in one transaction succeeds |
 | `audit_events` partitioned by month with PK `(id, occurred_at)`; block-mutation trigger | UPDATE/DELETE raise; **insert with no matching partition fails** (so partitions must pre-exist, plus a `DEFAULT` partition and an alert — SCHEMA §L); dropping a partition removes its rows without row triggers |
 
-### Still to run (needs a Supabase stack or equivalent)
-S-2, S-3, S-8, S-9; the Supabase-specific parts of S-1, S-5, S-6; S-4 at message-table scale. These remain **gates before Phase-1 exit**; the specification assumptions that depend on them (D-035, D-027, D-039, partition tooling) are unchanged in status.
+### 9.1 Results on a real Supabase project (worship-hub, Postgres 17.12, eu-west-2)
+
+**Setup.** A cut-down copy of the specification (organisations, profiles, memberships, roles and assignments, invitations + `invitation_tokens`, songs, files registry, conversations, participants, messages, attachments), the §4 helpers, §7 policies and RPCs, the `org-files` bucket policies and the `realtime.messages` policies were applied by migration. Eight synthetic users (owner A, admin A, member A, member A later suspended, invitee, member of A *and* admin of B, owner B, outsider) signed in with real passwords and every test used their **real JWTs through PostgREST, Storage and Realtime** — not SQL `set role`. Two churches were created through the real `create_organisation` RPC; invitations, acceptance, songs, a private DM, a private channel, an org channel, file registration and uploads were all done through the API. Test code lives outside the repository (scratch space) and is not committed.
+
+**Outcome (accurate tally).** First run: **130 checks, 121 passed, 9 failed** — 4 real spec defects (all `files.manage`, below) and 5 caused by the test harness. After fixing the spec bug and the harness, the **files, realtime and suspension sections were re-run (50 checks): 49 passed, 1 failed** — RT-03b, whose assertion was too strict (the payload was verified by hand to carry only ids, no body; it is **not** counted as a pass). The 80 isolation / scope / invitation / multi-org / private-message checks passed in the first run and were **not re-run** (the invitation tokens are single-use, so that section is not idempotent). Check IDs below follow DATABASE_TESTING_STRATEGY.md; the spike's test code lives outside the repository and is not committed.
+
+| Area | Result on Supabase |
+|---|---|
+| **S-1** extensions | `btree_gist`, `citext`, `pg_trgm`, `pg_cron`, `pg_partman`, `pgtap`, `pgsodium`, `supabase_vault` available; `pgcrypto` and Vault pre-installed. The `postgres` role is `NOSUPERUSER BYPASSRLS` (confirms S-10 on the real platform). |
+| **CAT-03** default-privilege lock-down | After `ALTER DEFAULT PRIVILEGES … REVOKE`, newly created tables had **zero** grants to `anon` and `authenticated`. |
+| **ISO** (cross-organisation) | Organisation B's owner read 0 rows of A in 8 tenant tables, could not insert/update/delete/move A rows, could not call any RPC against A (suspend, DM, register file, invite, assign role), and a forged cross-tenant message was rejected. `anon` was denied on tables and RPCs; an outsider with no memberships saw nothing. |
+| **CAT-16** token hash | `invitation_tokens` returned *permission denied* even to the organisation Owner. |
+| **SCP** escalation | A member could not invite, assign roles (including to self), or suspend; an Admin could not grant Owner or self-assign; the last Owner could not be suspended (even by an Admin); column grants stopped members changing their own `status` or `organisation_id`. |
+| **INV** invitations | A pending invitee saw no organisation, membership, invitation, workspace or conversation. Wrong token, another user's token and a reused token returned the **same** generic error. Access appeared only after acceptance; a second accept failed. |
+| **MUL** | A user in two churches saw exactly both churches' songs; Admin-in-B could not write in A or suspend/assign there; cross-organisation DMs were impossible. |
+| **PRV** private messages | Owner, Admin, other-organisation owner and outsider saw **0** DM conversations, messages or participants; participants saw them. Owner and member could not read a private channel; managers could not add themselves (no write grant, RPC-only); sender spoofing and posting into a private channel were rejected; no client DELETE on messages. |
+| **FIL** files | Other-organisation and outsider downloads and signed URLs denied; upload to unregistered paths, other organisations' prefixes, someone else's pending path and **overwrite (upsert)** all denied; listing another prefix empty; clients could not mark a file `available`. **Bug found:** see below. |
+| **RT** realtime | Participants joined their private topic and received `message.created`; other-organisation users, the Owner and the Admin could **not** join it; malformed topics denied; **clients could not broadcast onto a content topic**; non-participants received nothing. |
+| **MEM** suspension | The suspended member, on the **same JWT without re-login**, went from 3 songs to 0 immediately, lost organisations/conversations/files/posting/uploads, could not reinstate himself, could not bypass suspension with a new invitation, could not rejoin his realtime topic, and was told via `membership.revoked` on his personal topic. Other members were unaffected; reinstatement restored access. `my_workspaces()` still told him he was suspended. |
+
+**Real spec bug found by a failing test.** With `files.manage` in `can_read_file`, an Owner/Admin could download a **DM attachment** and any **unattached** file, and list them in Storage (FIL-02b, 02c, 04, 11c failed). Fixed: `files.manage` now means delete/quarantine only and grants no read/list access (RLS_SPEC §4.3, PERMISSIONS_MATRIX §2.8, new test FIL-03b). Re-run: all FIL checks pass.
+
+**Harness-caused failures (not spec defects, recorded so nobody repeats them).** (1) Node's built-in `fetch` ignores the sandbox proxy → run with `NODE_USE_ENV_PROXY=1`. (2) The `ws` WebSocket client also ignores it, which made *every* realtime channel error with `transport failure`, so the first realtime "denials" were meaningless; the **positive twin test caught this**, and after routing `ws` through `https-proxy-agent` the denials and allows were re-measured. (3) The id-only payload assertion was too strict: Realtime adds its own `id`; the payload carried only `id`, `message_id`, `conversation_id` and no body.
+
+**Behaviour to design around.**
+* `UPDATE` on a column without a column grant fails with *permission denied for table …* (PostgREST surfaces the table, not the column).
+* `supabase-js` realtime logs a notice that `send()` falls back to REST; use `httpSend()` explicitly.
+* A realtime join denied by policy reports `CHANNEL_ERROR` (no reason), and a join that is never answered times out — treat both as "no access".
+* Realtime revocation is *not* instantaneous for an already-joined socket, as designed: the spike confirmed the `membership.revoked` notification and that database reads stop at once; it did **not** attempt to read new content on a retained subscription because payloads carry no content.
+
+**Not covered by this run (still open).** Signed-URL expiry timing and `Cache-Control`; bucket MIME/size enforcement and quotas; malware scanning; the `forbid_org_change` trigger, scope-ancestor triggers and scoped (campus/ministry/department/team) permissions — the spike implemented organisation-scope roles only, so **SCP-07/08/11/12/14/15 are untested**; MFA `aal2` (S-8); Supabase branching (S-9); S-4 at message-table scale on Supabase hardware; expired-invitation acceptance; PostgREST `select=*` embedding leaks (ISO-12) beyond the tables above; concurrency (INV-08 double accept in parallel).
+
+### Still to run
+S-8, S-9; scoped-permission and trigger tests above; S-4 at scale on Supabase; the "not covered" list above. These remain **gates before Phase-1 exit**.
+

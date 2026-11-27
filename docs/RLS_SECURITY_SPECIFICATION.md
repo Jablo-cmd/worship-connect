@@ -303,7 +303,8 @@ returns boolean language sql stable security definer set search_path = '' as $$
     where f.id = p_file and f.status = 'available' and f.scan_status in ('clean','not_required')
       and private.is_member(f.organisation_id)
       and ( f.uploaded_by_user_id = (select auth.uid())
-         or private.has_perm(f.organisation_id, 'files.manage')
+         -- NOTE: `files.manage` is deliberately NOT a read path. Verified on Supabase: with it here, an Owner/Admin could
+         -- download a DM attachment and any unattached file (tests FIL-02b/02c/04/11c failed). files.manage = delete/quarantine only.
          or exists (select 1 from public.message_attachments ma
                     join public.messages ms on ms.id = ma.message_id
                     where ma.file_id = f.id and ms.deleted_at is null
@@ -444,7 +445,7 @@ RLS ON with **no policies**; `REVOKE ALL` from `anon`/`authenticated`; schema no
 
 | Table | SELECT | INSERT | UPDATE | DELETE | Notes |
 |---|---|---|---|---|---|
-| `files` | `private.can_read_file(id)` **or** uploader (any status, to see own pending) | RPC `register_file` (active member; quota check) | RPC (`finalise_file`, service role/worker sets `available`/`scan_status`) | RPC `delete_file` (uploader or P:`files.manage`) | Storage policy (§8) keys on this row |
+| `files` | `private.can_read_file(id)` **or** uploader (any status, to see own pending). **`files.manage` grants no read or list access** to content or metadata | RPC `register_file` (active member; quota check) | RPC (`finalise_file`, service role/worker sets `available`/`scan_status`) | RPC `delete_file` (uploader or P:`files.manage`) | Storage policy (§8) keys on this row |
 | `file_attachments` | Parent target visible | Parent target edit perm (`services.edit`, `rehearsals.manage`, `meetings.manage`, `production.manage`, `tasks.manage`) | same | same | file must be same-org, purpose-compatible, readable by attacher |
 
 ### 6.7 F — Music library
