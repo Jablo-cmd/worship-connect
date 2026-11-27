@@ -68,9 +68,11 @@ Run first; fail fast. Implemented as pgTAP over `pg_catalog` / `information_sche
 | CAT-13 | Every `UPDATE` policy has a `WITH CHECK`; every `INSERT` policy has a `WITH CHECK`. |
 | CAT-14 | `organisation_id` is covered by the `forbid_org_change` trigger on every tenant table. |
 | CAT-15 | Append-only tables (`audit_events`, `service_revisions`, `membership_status_events`, `policy_acceptances`, `*_revisions`) have the block-mutation trigger and no client UPDATE/DELETE privilege. |
-| CAT-16 | `token_hash` is not selectable by `authenticated`. |
+| CAT-16 | No client role has any privilege (table or column) on `invitation_tokens`; no table granted to `authenticated` has a column named `*_hash`/`*_secret`/`*_token`. |
 | CAT-17 | Tables/columns/policy names follow the conventions (lower snake case). |
 | CAT-18 | Table inventory in `DATABASE_SCHEMA.md` §0.3 equals the set of tables in the catalogue (doc/DB drift). |
+| CAT-20 | `private.is_valid_timezone` rejects `EST`, `UTC+3`, `Factory`, `Etc/GMT+5`, `posix/Europe/London`, empty/NULL; accepts `UTC`, `Europe/London`, `Africa/Johannesburg`, `Australia/Lord_Howe`. |
+| CAT-21 | `audit_events` has partitions covering now()…now()+3 months and a `DEFAULT` partition that is empty (alert condition). |
 | CAT-19 | Policy coverage equals the machine-readable RLS matrix (`rls_matrix.yaml`, generated from RLS_SPEC §6): for each table×operation, a policy exists iff the matrix says "direct"; none otherwise. |
 
 ### 3.2 Organisation isolation (requirement 1: *Organisation A cannot access Organisation B's data*)
@@ -151,7 +153,7 @@ Executed per state with *the same* operation set as ISO-P1 for a user who previo
 |---|---|---|
 | INV-01 | `heidi` (pending invite, not accepted) selects every tenant table, `organisations`, `memberships`, `invitations`, Storage, Realtime for A | 0 rows / denied everywhere |
 | INV-02 | `heidi` calls `get_invitation_preview(token)` | returns only org name, inviter name, expiry |
-| INV-03 | `heidi` selects `invitations` directly | 0 rows (no policy for invitees); `token_hash` unreadable even for `alice` |
+| INV-03 | `heidi` selects `invitations` directly | 0 rows (no policy for invitees); `invitation_tokens` unreadable even for `alice` |
 | INV-04 | Accept with correct token + verified e-mail | membership active; baseline `member` role; team pre-assignments; invitation `accepted`; audit event; **only now** does ISO-P1-style read access appear |
 | INV-05 | Accept with wrong token / expired / revoked / already used | identical generic error; no state change; timing does not differ measurably (statistical test, loose bound) |
 | INV-06 | Accept with a token issued for another e-mail | rejected |
@@ -194,7 +196,7 @@ Executed per state with *the same* operation set as ISO-P1 for a user who previo
 | INT-11 | Songs: catalogue edits after publication do not change `service_songs` snapshot fields or previous revision snapshots. |
 | INT-12 | Rights gating: writing lyrics/chords/audio resource without `allow_*_storage` rejected; with flag accepted. |
 | INT-13 | Scope ancestors derived by trigger: a client-supplied wrong `campus_id` for a team-scoped row is overwritten/rejected. |
-| INT-14 | Timezone/recurrence golden files across DST (S-7) incl. gaps and overlaps. |
+| INT-14 | Timezone/recurrence golden files across DST (S-7) incl. gaps and overlaps; pins PostgreSQL behaviour: gap time shifts forward (London 2027-03-28 01:30 → 02:30 BST), overlap resolves to the later standard-time instance; Lord Howe 30-minute shift; zones without DST stay stable. |
 | INT-15 | Erasure: `erase_my_account()` removes PII, keeps shared records attached to an anonymised membership; unavailability notes, contacts and private notes removed. |
 
 ### 3.8 Users in multiple organisations (requirement 6)

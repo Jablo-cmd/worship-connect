@@ -4,7 +4,7 @@
 
 Companion documents: [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) · [RLS_SECURITY_SPECIFICATION.md](RLS_SECURITY_SPECIFICATION.md) · [DATABASE_TESTING_STRATEGY.md](DATABASE_TESTING_STRATEGY.md) · [ROADMAP.md](ROADMAP.md)
 
-`DOMAIN_MODEL.md` §14 forbids creating "every conceptual table in one unreviewed migration". This plan delivers 102 tables in **small, reviewable migrations aligned to the roadmap phases**: no table exists before the phase that needs it.
+`DOMAIN_MODEL.md` §14 forbids creating "every conceptual table in one unreviewed migration". This plan delivers 103 tables in **small, reviewable migrations aligned to the roadmap phases**: no table exists before the phase that needs it.
 
 ---
 
@@ -49,7 +49,7 @@ Companion documents: [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) · [RLS_SECURITY_S
 | M-013 | `authorisation_catalogue` | `permissions`, `roles`, `role_permissions`; **seed 45 permissions + 8 system roles + mappings** | M-011 |
 | M-014 | `memberships` | `memberships`, `membership_status_events`, `membership_contacts`, `policy_acceptances`; status-transition and last-owner triggers | M-011, M-012 |
 | M-015 | `role_assignments` | `membership_role_assignments`; scope/role-org triggers; auto-`member` trigger | M-013, M-014 |
-| M-016 | `invitations` | `invitations`, `invitation_teams`; column privilege on `token_hash` | M-014, M-015 |
+| M-016 | `invitations` | `invitations`, `invitation_tokens` (server-only), `invitation_teams` | M-014, M-015 |
 | M-017 | `authz_helpers` | `private.my_org_ids`, `is_member`, `my_membership_id`, `has_perm`, `has_perm_for_team`, `has_perm_over_member`, `member_in_scope`, `scope_ancestors`, `has_perm_at_scope`, `can_grant_role`, `require_aal2` | M-013…M-016 |
 | M-018 | `files_registry` | `files` (+ `organisation_settings.logo_file_id`, `memberships.avatar_file_id` FKs), storage buckets, **`storage.objects` policies**, `register_file`/`delete_file` RPCs | M-017 |
 | M-019 | `rls_phase1` | Grants + policies for every Phase-1 table (RLS_SPEC §6.1–6.3, 6.6) | M-017, M-018 |
@@ -222,7 +222,7 @@ Each produces a short written result appended to this plan (or `DECISIONS.md`). 
 | S-2 | Realtime private channels: policy evaluated at join; behaviour on token refresh; `realtime.send` from triggers; topic parsing in policies | Isolation + revocation behaviour matches RLS_SPEC §10; documented limits |
 | S-3 | `storage.objects` policies calling `SECURITY DEFINER` helpers; signed URL expiry; listing endpoints do not reveal other tenants' objects | Cross-tenant list/read/upload attempts denied |
 | S-4 | `has_perm` benchmark: 5 000 orgs, 100 k memberships, 1 M songs/assignments, 20 M messages | p95 list query within agreed budget (set in S-4; e.g. <50 ms for 50-row pages); otherwise adopt `effective_grants` |
-| S-5 | PostgREST with column-level `GRANT UPDATE (cols)` and `REVOKE SELECT (token_hash)` — behaviour of `select=*` and error shape | Documented client rule: never `select *` on `invitations`; use views/RPC where needed |
+| S-5 | Column-level privileges: `GRANT UPDATE (cols)` and `REVOKE SELECT (col)` — behaviour of `select *` and error shape | **Resolved at SQL level (§9)**; PostgREST layer still to be confirmed |
 | S-6 | `create_organisation` as one RPC transaction through PostgREST under `authenticated`; `auth.users` read inside `SECURITY DEFINER` | Atomic; no orphans on forced failure |
 | S-7 | DST generation for `event_series` in zones with DST, without DST, and with unusual rules (e.g. `Africa/Johannesburg`, `Europe/London`, `Australia/Lord_Howe`, `America/Sao_Paulo`) | Golden-file test of occurrences across transitions |
 | S-8 | MFA (`aal2`) claim availability for `require_aal2()` | Claim present after TOTP verification |
@@ -246,3 +246,63 @@ Each produces a short written result appended to this plan (or `DECISIONS.md`). 
 - [ ] Rollback/forward-fix noted; lock/timeouts set; no table rewrite risk.
 - [ ] Types regenerated; docs updated; `DECISIONS.md` updated if a decision changed.
 - [ ] No secrets, real data or production identifiers in the migration.
+
+---
+
+## 9. Spike results (run 2026-11-27)
+
+**Environment and limits of this evidence.** PostgreSQL 16.15 (vanilla Ubuntu build) with a **mocked** `auth` schema (`auth.uid()` reading `request.jwt.claims`) and plain `anon`/`authenticated`/`service_role` roles. **No Docker daemon was available, so no Supabase stack ran**: nothing below says anything about PostgREST, Supabase Auth, Storage, Realtime, extension availability on the hosted tier, or Supabase's managed `postgres` role beyond what is stated. The SQL under test was the helper/policy code from RLS_SECURITY_SPECIFICATION §4 and §7. Dataset for S-4: 2 000 organisations, 100 006 memberships, 110 006 role assignments, 1 000 000 songs, 200 000 rehearsals.
+
+| Spike | Status | Result |
+|---|---|---|
+| **S-1** Extensions | **Partial** | `pgcrypto`, `citext`, `pg_trgm`, `btree_gist` install and work on PG 16. `pg_partman`, `pg_cron`, `pgtap` were **not** available in this build. **Availability on the Supabase tier is unverified.** The spec's partition maintenance must not depend on `pg_partman` until confirmed (a plain SQL function + scheduler is sufficient). |
+| **S-2** Realtime private channels | **Not run** | Needs the Supabase stack. D-035 stays *Proposed*. |
+| **S-3** Storage policies | **Not run** | Needs the Supabase stack. |
+| **S-4** RLS performance | **Done at SQL level; spec changed** | See below. |
+| **S-5** Column privileges | **Done at SQL level; spec changed** | See below. PostgREST behaviour still unverified. |
+| **S-6** Atomic `create_organisation` | **Done (SQL level)** | A `SECURITY DEFINER` function inserting organisation + settings + membership + role assignment and then raising rolled back **all** rows (0 leaked); success path committed all; `anon` got `permission denied for function`. Through PostgREST/`auth.users` still to confirm on Supabase. |
+| **S-7** Time zones / DST | **Done; spec changed** | See below. |
+| **S-8** MFA `aal2` claim | **Not run** | Needs Supabase Auth. |
+| **S-9** Branching / CI flow | **Not run** | Needs Supabase tooling. |
+| **S-10** FORCE RLS | **Done; spec corrected** | A table owner with `BYPASSRLS` still sees all rows with `FORCE ROW LEVEL SECURITY`; an owner without it sees none. FORCE is therefore **not a control** for Supabase's `postgres` role; kept as harmless defence for non-bypass owners. |
+
+### S-4 details
+
+| Query (as `authenticated`, RLS on) | Result |
+|---|---|
+| Member: page of 50 songs, filtered to one organisation (500 rows, 1 M table) | **4.0 ms**, index scan |
+| Same, after switching to the array predicate | **2.3 ms** |
+| Member: count of one organisation's songs (500 rows → 500 `has_perm` calls) | **10 ms** (≈20 µs per row) |
+| Team-scoped leader: 100 rehearsals, per-row scoped `has_perm` | **2.1–2.5 ms** |
+| Member lacking the permission: same list | 2.3 ms, 0 rows |
+| Outsider reading another organisation's songs | 0.9 ms, **0 rows** |
+| Multi-organisation member, **no** organisation filter, `IN (select setof_fn())` policy | **240 ms** (116 ms with `ROWS 5`): sequential scan of 1 M rows — the planner cannot turn a hashed sub-select into an index condition |
+| Same query, **array** predicate `organisation_id = ANY ((select private.my_org_array())::uuid[])` | **30 ms**, bitmap index scan |
+
+**Conclusions.** (1) The `has_perm` design meets the working budget (<50 ms for 50-row pages) at this scale **without** the `effective_grants` optimisation — it stays deferred. (2) Table policies must use the **array form**; the spec now says so (RLS_SPEC §4.2, §5, §7). (3) Applications should still always filter by `organisation_id`. Caveat: one 2 000-organisation dataset on a warm cache on a single machine; the 20 M-message and concurrency cases were **not** run and S-4 should be repeated on Supabase hardware before Phase-1 exit.
+
+### S-5 details (bug found in the original spec)
+
+* `REVOKE SELECT (token_hash)` **had no effect** while a table-level `SELECT` grant existed: `select *` still returned the hash. The original RLS spec relied on exactly that statement.
+* The effective pattern is to revoke the table-level grant and grant a column list; then `select *` fails with *permission denied for table* (also for `WHERE token_hash = …`, so there is no oracle) — but `select *` is PostgREST's default shape, so clients would break.
+* **Spec change:** the hash moved to a server-only table `invitation_tokens` (no policies, no grants). Column-level `GRANT UPDATE (cols)` works as designed (updating a granted column succeeded; an ungranted column was denied).
+
+### S-7 details
+
+* Wall-clock recurrence `(date + time) AT TIME ZONE tz` kept 10:00 local across the 2027 spring change in `Europe/London` (10:00 UTC → 09:00 UTC); `Africa/Johannesburg` stayed 08:00 UTC; `America/Sao_Paulo` stayed 13:00 UTC in January and July; `Australia/Lord_Howe` shifted by 30 minutes (23:00 → 23:30 UTC).
+* Gap (01:30 on 2027-03-28, London): PostgreSQL shifts the time forward to 02:30 BST. Overlap (01:30 on 2026-10-25): PostgreSQL returns the **later, standard-time** instance. The earlier spec text said "first occurrence for overlaps"; it now states the observed behaviour, to be pinned by golden tests.
+* `AT TIME ZONE` accepts `EST`, `UTC+3` and `Factory`, and 16 of 499 `pg_timezone_names` have no `/`. "Does not raise" is not validation; the validator is now specified as an allow-list (SCHEMA §13 item 3, test CAT-20).
+
+### Additional checks run (spec features)
+
+| Check | Result |
+|---|---|
+| Composite FK `(organisation_id, campus_id)` rejects a team in organisation B pointing at a campus of A | Rejected (FK violation); legitimate row accepted |
+| Policy `WITH CHECK` rejects an insert by a member without `music.manage`; `anon` has no table privilege | Rejected / `permission denied` |
+| `SECURITY DEFINER` function **without** `search_path=''` | **Hijacked** by a shadow table in a schema on the caller's `search_path` (outsider reported "member"); the hardened `private.is_member` returned `false` |
+| Equipment `EXCLUDE USING gist … WHERE (is_exclusive AND status IN (…))` | Overlap rejected; adjacent ranges and cancelled overlaps allowed |
+| `DEFERRABLE INITIALLY DEFERRED` unique position | Swapping two positions in one transaction succeeds |
+| `audit_events` partitioned by month with PK `(id, occurred_at)`; block-mutation trigger | UPDATE/DELETE raise; **insert with no matching partition fails** (so partitions must pre-exist, plus a `DEFAULT` partition and an alert — SCHEMA §L); dropping a partition removes its rows without row triggers |
+
+### Still to run (needs a Supabase stack or equivalent)
+S-2, S-3, S-8, S-9; the Supabase-specific parts of S-1, S-5, S-6; S-4 at message-table scale. These remain **gates before Phase-1 exit**; the specification assumptions that depend on them (D-035, D-027, D-039, partition tooling) are unchanged in status.
