@@ -27,6 +27,15 @@ Worship Connect is a multi-tenant SaaS platform for churches to organise people,
 - [Delivery roadmap](docs/ROADMAP.md)
 - [Architecture decisions](docs/DECISIONS.md)
 
+### Database specification (proposed — not yet approved or implemented)
+
+- [Database architecture](docs/DATABASE_ARCHITECTURE.md) — findings, principles, decisions, risks, requirement traceability
+- [Database schema](docs/DATABASE_SCHEMA.md) — table inventory, columns, constraints, indexes, timestamps and deletion policy
+- [RLS security specification](docs/RLS_SECURITY_SPECIFICATION.md) — privileges, helper functions, per-table policies, storage and realtime
+- [Permissions matrix](docs/PERMISSIONS_MATRIX.md) — permission catalogue, system roles and role/permission matrix
+- [Database migration plan](docs/DATABASE_MIGRATION_PLAN.md) — phased migrations, ordering and dependencies
+- [Database testing strategy](docs/DATABASE_TESTING_STRATEGY.md) — automated tenant-isolation and security tests
+
 ## Initial technology direction
 
 Next.js, TypeScript, Supabase Auth, PostgreSQL, Row Level Security, Supabase Realtime, Supabase Storage, Tailwind CSS, shadcn/ui and Vercel. These are proposed choices and must be validated for compatibility, limits and cost before production.
