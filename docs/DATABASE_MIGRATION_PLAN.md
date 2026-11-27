@@ -389,7 +389,7 @@ Test-code defects found along the way (not product defects): a NUL byte in a fil
 
 ### 10.5 Not done / required before any production use
 
-1. **CI has not run.** Run it on GitHub; fix whatever it finds.
+1. ~~CI has not run.~~ CI ran on PR #4 and is green (it found CAT-16 and a real `files_select` defect, fixed by M-030). Remaining gates are tracked in `PRODUCTION_READINESS.md`.
 2. **Not covered by tests yet:** signed-URL expiry and `Cache-Control`; malware scanning (no scanner exists — files never become `available` without a service-role actor); parallel double-accept of one invitation; per-user quota edge cases; Realtime behaviour for a socket that stays open across a suspension beyond the first check (only the revoke notification and fresh-join denial are tested); `platform.*` console functions beyond privilege checks; `erase_my_account()` (not implemented); retention/purge jobs (not implemented); `report_exports`, notifications and every Phase 2+ table (not created).
 3. **Operational:** separate production project, backups and a **restore drill**, monitoring/alerting (including the audit DEFAULT-partition alert and partition job), incident runbook, key-rotation drill, enabling Auth leaked-password protection and the production Auth/email settings, rate limiting at the edge for sign-in/recovery/invitation endpoints.
 4. **Review:** independent security review of every `SECURITY DEFINER` function and policy; penetration test (tenant isolation, invitations, storage, realtime); legal decisions D-016/D-033/D-040/D-043.

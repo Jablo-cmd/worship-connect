@@ -1,0 +1,52 @@
+# Production database release. Manual only; the `production` GitHub Environment MUST be configured with
+# required reviewers (Settings > Environments) so nothing reaches production without an explicit approval.
+# Applies ONLY supabase/migrations. It never runs seed.sql, scripts/reset-test-data.sql or the API test suite
+# against production (those create/delete synthetic users and are dev/test only).
+name: deploy-production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_ref:
+        description: 'Type the production project ref to confirm the target'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency: { group: production-database, cancel-in-progress: false }
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: supabase/setup-cli@v1
+        with: { version: latest }
+      - name: Guard - target must be the confirmed production project, never the dev project
+        env:
+          PROD_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          DEV_REF: pzcobmuziehojxqqxwbw
+        run: |
+          [ -n "$PROD_REF" ] || { echo "SUPABASE_PROJECT_REF secret is not set"; exit 1; }
+          [ "$PROD_REF" != "$DEV_REF" ] || { echo "refusing: production ref equals the dev project"; exit 1; }
+          [ "${{ inputs.confirm_ref }}" = "$PROD_REF" ] || { echo "confirm_ref does not match the production project"; exit 1; }
+      - name: Link production project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+      - name: Dry run (lists pending migrations)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: supabase db push --dry-run
+      - name: Apply migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: supabase db push
+      - name: Post-release advisor check reminder
+        run: echo "Run get_advisors (security + performance) against production and confirm zero ERROR-level items (docs/RUNBOOKS.md section 7)."
