@@ -36,6 +36,28 @@ Worship Connect is a multi-tenant SaaS platform for churches to organise people,
 - [Database migration plan](docs/DATABASE_MIGRATION_PLAN.md) — phased migrations, ordering and dependencies
 - [Database testing strategy](docs/DATABASE_TESTING_STRATEGY.md) — automated tenant-isolation and security tests
 
+## Database foundation (Phase 1) — development and testing
+
+The Phase 1 database (identity, tenancy, roles, invitations, files registry, audit, platform schema) lives in
+`supabase/migrations/` and is verified by an automated security suite. **Nothing here is production-deployed.**
+
+```bash
+npm ci
+supabase start && supabase db reset        # local stack; applies migrations + synthetic seed (supabase/seed.sql)
+supabase test db                           # pgTAP: catalogue + trigger tests (supabase/tests/database)
+eval "$(supabase status -o env | sed 's/^/export /')"
+SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY" npm test   # API suite, real JWTs
+npm run check:matrix                       # permission seed must match docs/PERMISSIONS_MATRIX.md
+```
+
+- Tests build two churches through the real API and need a clean tenant state. On a persistent dev database run
+  `scripts/reset-test-data.sql` first (it refuses to run if any non-test user exists).
+- `supabase/seed.sql` creates **synthetic** users and must never be run against production.
+- The service-role key is used by test fixtures only (to play the file scanner). It must never appear in browser code,
+  `NEXT_PUBLIC_*` variables or any committed file. See `.env.example`.
+- Never edit an applied migration: add a new one. Permission/role seed changes: edit the matrix, run
+  `python3 scripts/generate-permissions-seed.py`, and add a corrective migration for deployed databases.
+
 ## Initial technology direction
 
 Next.js, TypeScript, Supabase Auth, PostgreSQL, Row Level Security, Supabase Realtime, Supabase Storage, Tailwind CSS, shadcn/ui and Vercel. These are proposed choices and must be validated for compatibility, limits and cost before production.

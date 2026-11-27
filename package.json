@@ -1,0 +1,25 @@
+{
+  "name": "worship-connect",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Worship Connect - database foundation, migrations and security tests",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:matrix": "python3 scripts/generate-permissions-seed.py --check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.119.2",
+    "@types/node": "^26.6.11",
+    "@types/ws": "^8.18.2",
+    "https-proxy-agent": "^9.1.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.2",
+    "ws": "^8.23.0"
+  }
+}
