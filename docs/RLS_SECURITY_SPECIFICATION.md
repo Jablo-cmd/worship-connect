@@ -24,7 +24,7 @@ All SQL below is **illustrative specification** to be turned into reviewed migra
 | 1 | RLS is the **last line of defence**, not the only one: composite tenant foreign keys, immutable `organisation_id`, server-side validation and RPC checks are layered underneath (ARCHITECTURE §4). |
 | 2 | Policies are **small, uniform and generated from patterns** (§5). Bespoke policies need a written justification and a dedicated test. |
 | 3 | Policies call a **small library of audited helper functions** (§4); they never embed role names. |
-| 4 | Wrap per-statement constants in `(select …)` so the planner evaluates them once (`(select auth.uid())`, `(select private.my_org_ids())`). |
+| 4 | Wrap per-statement constants in `(select …)` so the planner evaluates them once (`(select auth.uid())`, `(select private.my_org_array())`). |
 | 5 | Every column used by a policy is indexed. |
 | 6 | **Never weaken a policy to make a feature work** (`TECHNICAL_ARCHITECTURE.md` §17.2). If a feature needs more access, add a narrow `SECURITY DEFINER` function with its own checks and tests. |
 | 7 | `WITH CHECK` on every INSERT/UPDATE policy so a caller cannot *move* a row into a tenant, scope or state they do not control. |
@@ -64,8 +64,8 @@ grant select on public.memberships to authenticated;
 -- Column-restricted update (RLS cannot restrict columns; privileges can)
 grant update (name, timezone, country_code, contact_email, contact_phone, website_url)
   on public.organisations to authenticated;
--- Secret column never selectable by clients
-revoke select (token_hash) on public.invitations from authenticated;
+-- Secrets live in server-only tables with NO grants (e.g. invitation_tokens); a column-level
+-- REVOKE is ineffective while a table-level grant exists (spike S-5).
 ```
 
 **Result:** `anon` can do nothing; `authenticated` can do only what a grant *and* a policy both allow; `service_role` bypasses RLS and is confined by §12.
@@ -94,7 +94,7 @@ A `SECURITY DEFINER` function bypasses RLS on the tables it reads — that is wh
 ### 4.2 Core helpers
 
 ```sql
--- Organisations the caller is an ACTIVE member of (active org). Used in IN-lists.
+-- Organisations the caller is an ACTIVE member of (active org), as a SET. Use for joins/RPCs.
 create or replace function private.my_org_ids()
 returns setof uuid language sql stable security definer set search_path = '' as $$
   select m.organisation_id
@@ -103,6 +103,17 @@ returns setof uuid language sql stable security definer set search_path = '' as 
   where m.user_id = (select auth.uid())
     and m.status  = 'active'
     and o.status  = 'active'
+$$;
+
+-- Same, as an ARRAY. THIS is what table policies use: `organisation_id = ANY ((select private.my_org_array())::uuid[])`.
+-- Spike S-4: the `IN (SELECT setof_fn())` form cannot become an index condition, so an *unfiltered* query for a
+-- multi-organisation user fell back to a sequential scan (240 ms on 1 M rows); the array form uses the index (30 ms).
+create or replace function private.my_org_array()
+returns uuid[] language sql stable security definer set search_path = '' as $$
+  select coalesce(array_agg(m.organisation_id), '{}')
+  from public.memberships m
+  join public.organisations o on o.id = m.organisation_id
+  where m.user_id = (select auth.uid()) and m.status = 'active' and o.status = 'active'
 $$;
 
 create or replace function private.is_member(p_org uuid)
@@ -329,7 +340,7 @@ $$;
 
 ### 4.5 Performance notes
 
-* `(select private.my_org_ids())` and `(select auth.uid())` are evaluated once per statement (initPlan). `has_perm(...)` with row-dependent scope arguments is evaluated per row; each call is two or three index lookups against small tables (`memberships (user_id, organisation_id) WHERE active`, `membership_role_assignments (membership_id) WHERE revoked_at IS NULL`, `role_permissions (role_id, permission_key)`).
+* `(select private.my_org_array())` and `(select auth.uid())` are evaluated once per statement (initPlan). Measured results are in MIGRATION_PLAN §9. `has_perm(...)` with row-dependent scope arguments is evaluated per row; each call is two or three index lookups against small tables (`memberships (user_id, organisation_id) WHERE active`, `membership_role_assignments (membership_id) WHERE revoked_at IS NULL`, `role_permissions (role_id, permission_key)`).
 * Policies list the **cheapest, most selective predicate first** (`organisation_id IN (select …)`) so the planner can use the tenant-leading index before invoking per-row helpers.
 * If benchmarking shows `has_perm` dominates for a hot list query, the sanctioned optimisation is a trigger-maintained `effective_grants` table (membership, permission, scope columns) turning the check into a single index probe. That is **not** built in v1 (premature complexity) — see ARCHITECTURE §9.
 
@@ -341,7 +352,7 @@ Every policy in §6 is an instance of one of these.
 
 | Id | Pattern | SELECT | Write |
 |---|---|---|---|
-| **P1** | *Organisation catalogue* | `organisation_id IN (SELECT private.my_org_ids())` | `has_perm(org, key[, scope])` |
+| **P1** | *Organisation catalogue* | `organisation_id = ANY ((SELECT private.my_org_array())::uuid[])` | `has_perm(org, key[, scope])` |
 | **P2** | *Own rows* | `membership_id = private.my_membership_id(organisation_id)` | same, with `WITH CHECK` |
 | **P3** | *Permission over a person* | own **or** `has_perm_over_member(org, key, membership_id)` | permission over the person |
 | **P4** | *Inherit from parent* | `EXISTS (SELECT 1 FROM parent p WHERE p.id = child.parent_id)` — **runs the parent's RLS** because the subquery executes as the caller | `EXISTS (parent p … AND has_perm(… edit …))` |
@@ -358,11 +369,11 @@ Every policy in §6 is an instance of one of these.
 
 ## 6. Per-table RLS matrix
 
-**Legend.** *RLS* column: every table is **ON**; `ON+F` = ON and `FORCE` (also applies to the table owner role in non-Supabase-superuser contexts; documented for completeness). A dash means **denied (no policy / no grant)**.
+**Legend.** *RLS* column: every table is **ON**; `ON+F` = ON and `FORCE`. FORCE only affects table owners *without* `BYPASSRLS`; the Supabase `postgres` role has `BYPASSRLS`, so FORCE adds no protection there (verified, spike S-10) — the real controls are the grants in §3 and keeping application code off `postgres`/`service_role`. A dash means **denied (no policy / no grant)**.
 
 | Shorthand | Meaning |
 |---|---|
-| **M** | active member of the row's organisation (`organisation_id IN (SELECT private.my_org_ids())`) |
+| **M** | active member of the row's organisation. Written in policies as `organisation_id = ANY ((SELECT private.my_org_array())::uuid[])` (not `IN (SELECT …)`; see §4.5) |
 | **Self** | row belongs to the caller: `membership_id = private.my_membership_id(organisation_id)` (or `user_id = auth.uid()` for global tables) |
 | **P:`k`** | `has_perm(organisation_id, 'k', row's SC ancestors)`; rows without SC columns match only organisation-scope grants |
 | **Pm:`k`** | `has_perm_over_member(organisation_id, 'k', <the person the row is about>)` |
@@ -376,12 +387,13 @@ Every policy in §6 is an instance of one of these.
 | Table | SELECT | INSERT | UPDATE | DELETE | Scope / tenant checks |
 |---|---|---|---|---|---|
 | `profiles` | Self (`id = auth.uid()`) | Trg (on `auth.users` insert) | Self; columns `display_name, preferred_timezone, locale, avatar_path` | — (erasure RPC) | Global table: never visible across users |
-| `organisations` | M (`id IN my_org_ids`) | RPC `create_organisation` | P:`org.settings.manage`; columns `name, timezone, country_code, contact_*, website_url` only; `status`/`slug` never | — | `status` changed only by `platform.*` |
+| `organisations` | M (`id = ANY(my_org_array())`) | RPC `create_organisation` | P:`org.settings.manage`; columns `name, timezone, country_code, contact_*, website_url` only; `status`/`slug` never | — | `status` changed only by `platform.*` |
 | `organisation_settings` | M | RPC (with organisation) | P:`org.settings.manage` | — | 1:1 on org id |
 | `memberships` | Self (any status) **or** (M and `status='active'`) **or** P:`members.suspend` | RPC (`accept_invitation`, `create_organisation`) | Self while active (cols `display_name, avatar_file_id, home_campus_id`); Pm:`members.manage` (same cols). `status` via RPC `set_membership_status` | — | Suspended/removed rows invisible to ordinary members |
 | `membership_status_events` | Self (own history) or P:`members.suspend` | Trg/RPC | — | — | Append-only |
 | `membership_contacts` | Self or Pm:`members.view_contact` | Self | Self | Self | |
-| `invitations` | P:`members.invite` at the invitation's RS scope, or invited_by = Self. **`token_hash` ungranted.** | RPC `create_invitation` | RPC (`revoke_invitation`, `resend_invitation`) | — | An invitee has no policy at all; they use `get_invitation_preview`/`accept_invitation` |
+| `invitations` | P:`members.invite` at the invitation's RS scope, or invited_by = Self | RPC `create_invitation` | RPC (`revoke_invitation`, `resend_invitation`) | — | An invitee has no policy at all; they use `get_invitation_preview`/`accept_invitation` |
+| `invitation_tokens` | — (server-only; no policy, no grant) | RPC | — | cascade | Holds `token_hash`; spike S-5 |
 | `invitation_teams` | Parent | RPC | — | Parent (with invitation) | Teams must lie in inviter's scope |
 | `policy_acceptances` | Self or P:`org.settings.manage` | Self | — | — | Append-only |
 
@@ -538,7 +550,7 @@ group by a.organisation_id, a.membership_id;
 
 ```sql
 alter table public.songs enable row level security;
-alter table public.songs force row level security;
+alter table public.songs force row level security;   -- harmless, but NOT a control on Supabase: roles with BYPASSRLS (incl. `postgres`) ignore it (spike S-10)
 grant select, insert, update, delete on public.songs to authenticated;
 ```
 
@@ -546,7 +558,7 @@ grant select, insert, update, delete on public.songs to authenticated;
 
 ```sql
 create policy songs_select on public.songs for select to authenticated
-using ( organisation_id in (select private.my_org_ids())
+using ( organisation_id = any ((select private.my_org_array())::uuid[])
         and private.has_perm(organisation_id, 'music.view') );
 
 create policy songs_insert on public.songs for insert to authenticated
@@ -566,7 +578,7 @@ using ( private.has_perm(organisation_id, 'music.delete')
 ```sql
 -- organisations: visible only to active members; edit via permission and column grant.
 create policy organisations_select on public.organisations for select to authenticated
-using ( id in (select private.my_org_ids()) );
+using ( id = any ((select private.my_org_array())::uuid[]) );
 create policy organisations_update on public.organisations for update to authenticated
 using      ( private.has_perm(id, 'org.settings.manage') )
 with check ( private.has_perm(id, 'org.settings.manage') );
@@ -577,12 +589,12 @@ with check ( private.has_perm(id, 'org.settings.manage') );
 create policy memberships_select on public.memberships for select to authenticated
 using (
      user_id = (select auth.uid())
-  or ( organisation_id in (select private.my_org_ids()) and status = 'active' )
+  or ( organisation_id = any ((select private.my_org_array())::uuid[]) and status = 'active' )
   or private.has_perm(organisation_id, 'members.suspend')
 );
 create policy memberships_update_self on public.memberships for update to authenticated
 using      ( user_id = (select auth.uid()) and status = 'active'
-             and organisation_id in (select private.my_org_ids()) )
+             and organisation_id = any ((select private.my_org_array())::uuid[]) )
 with check ( user_id = (select auth.uid()) and status = 'active' );
 -- column grant limits what can change:
 grant update (display_name, avatar_file_id, home_campus_id) on public.memberships to authenticated;
@@ -662,8 +674,7 @@ end $$;
 ### 7.4 Invitations — creation and acceptance
 
 ```sql
--- Column-level lock: clients can never read the token hash.
-revoke select (token_hash) on public.invitations from authenticated;
+-- The token hash is in public.invitation_tokens: RLS on, no policy, no grant -> unreachable by clients.
 
 create policy invitations_select on public.invitations for select to authenticated
 using ( invited_by_membership_id = private.my_membership_id(organisation_id)
@@ -696,15 +707,17 @@ begin
       raise exception 'forbidden' using errcode = '42501';
     end if;
   end loop;
-  insert into public.invitations (organisation_id, email, token_hash, role_id, scope_type,
+  insert into public.invitations (organisation_id, email, role_id, scope_type,
         campus_id, ministry_id, department_id, team_id, invited_by_membership_id, expires_at)
-  values (p_org, p_email, extensions.digest(v_token, 'sha256'), p_role, p_scope_type,
+  values (p_org, p_email, p_role, p_scope_type,
         case when p_scope_type = 'campus'     then p_scope_id end,
         case when p_scope_type = 'ministry'   then p_scope_id end,
         case when p_scope_type = 'department' then p_scope_id end,
         case when p_scope_type = 'team'       then p_scope_id end,
         v_me, v_exp)
   returning id into v_id;
+  insert into public.invitation_tokens (invitation_id, organisation_id, token_hash)
+    values (v_id, p_org, extensions.digest(v_token, 'sha256'));
   insert into public.invitation_teams (organisation_id, invitation_id, team_id)
     select p_org, v_id, unnest(p_team_ids);
   perform private.write_audit(p_org, 'invitation.created', 'invitation', v_id, null, 'notice');
@@ -723,9 +736,10 @@ declare
 begin
   if v_uid is null then raise exception 'invalid_invitation' using errcode = '28000'; end if;
   select lower(email), (email_confirmed_at is not null) into v_email, v_verified from auth.users where id = v_uid;
-  select * into v_inv from public.invitations
-   where token_hash = extensions.digest(p_token, 'sha256') and status = 'pending'
-   for update;                                           -- serialises concurrent accepts
+  select i.* into v_inv from public.invitations i
+   join public.invitation_tokens t on t.invitation_id = i.id
+   where t.token_hash = extensions.digest(p_token, 'sha256') and i.status = 'pending'
+   for update of i;                                           -- serialises concurrent accepts
   -- ONE generic error for: unknown token, expired, revoked, used, e-mail mismatch, unverified e-mail
   if not found or v_inv.expires_at <= now() or not coalesce(v_verified,false)
      or lower(v_inv.email::text) <> v_email then
@@ -773,7 +787,7 @@ end $$;
 ```sql
 create policy unavailability_select on public.member_unavailability for select to authenticated
 using (
-  organisation_id in (select private.my_org_ids())
+  organisation_id = any ((select private.my_org_array())::uuid[])
   and ( membership_id = private.my_membership_id(organisation_id)
      or private.has_perm_over_member(organisation_id, 'availability.view', membership_id)
      or private.has_perm_over_member(organisation_id, 'services.assign',  membership_id) )
@@ -792,7 +806,7 @@ with check ( membership_id = private.my_membership_id(organisation_id) );
 
 ```sql
 create policy services_select on public.services for select to authenticated
-using ( organisation_id in (select private.my_org_ids())
+using ( organisation_id = any ((select private.my_org_array())::uuid[])
         and private.can_see_service(id, organisation_id, status, campus_id) );
 
 create policy services_insert on public.services for insert to authenticated

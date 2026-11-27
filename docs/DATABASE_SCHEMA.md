@@ -80,7 +80,7 @@ Typed columns replace the polymorphic `scope_id` in `DOMAIN_MODEL.md` §3, becau
 
 | Group | Tables | Count |
 |---|---|---:|
-| A. Identity & tenancy | `profiles`, `organisations`, `organisation_settings`, `memberships`, `membership_status_events`, `membership_contacts`, `invitations`, `invitation_teams`, `policy_acceptances` | 9 |
+| A. Identity & tenancy | `profiles`, `organisations`, `organisation_settings`, `memberships`, `membership_status_events`, `membership_contacts`, `invitations`, `invitation_tokens`, `invitation_teams`, `policy_acceptances` | 10 |
 | B. Organisation structure | `campuses`, `ministries`, `departments`, `teams`, `locations` | 5 |
 | C. Authorisation | `permissions`, `roles`, `role_permissions`, `membership_role_assignments` | 4 |
 | P. Platform (schema `platform`) | `platform.admins`, `platform.support_access_grants`, `platform.takedown_requests`, `platform.organisation_status_log` | 4 |
@@ -93,7 +93,7 @@ Typed columns replace the polymorphic `scope_id` in `DOMAIN_MODEL.md` §3, becau
 | J. Communication | `announcements`, `announcement_receipts`, `conversations`, `conversation_participants`, `messages`, `message_attachments`, `message_reactions`, `message_reports`, `notifications`, `notification_preferences`, `notification_deliveries`, `push_subscriptions` | 12 |
 | K. Technical production | `equipment_items`, `equipment_allocations`, `production_plans`, `production_plan_revisions`, `stage_plots`, `stage_plot_elements`, `input_list_items`, `monitor_requirements`, `production_cues`, `production_checklist_items`, `production_requirements`, `production_notes` | 12 |
 | L. Reporting & audit | `audit_events`, `report_exports` | 2 |
-| | **Total** | **102** |
+| | **Total** | **103** |
 
 Reserved but **not** in v1 (see [DATABASE_ARCHITECTURE.md](DATABASE_ARCHITECTURE.md) §12): `membership_permission_overrides`, `plans`/`organisation_entitlements`, AI-processing tables, `message_edit_history`.
 
@@ -215,7 +215,6 @@ STD + TK + RS columns.
 | Column | Type | Notes |
 |---|---|---|
 | `email` | citext NOT NULL | Invitation is **bound to this verified e-mail** (D-022) |
-| `token_hash` | bytea NOT NULL UNIQUE | SHA-256 of a 256-bit random token; raw token is returned once by `create_invitation()` and never stored |
 | `status` | text NOT NULL DEFAULT 'pending' | `pending`, `accepted`, `revoked`, `expired` |
 | `role_id` | uuid NULL | → roles (extra role to give at the RS scope; `member` is always given). Trigger: role must be global or this organisation's; ceiling check at creation. |
 | `invited_by_membership_id` | uuid NOT NULL | → memberships |
@@ -229,8 +228,15 @@ STD + TK + RS columns.
 
 * UNIQUE partial `(organisation_id, email) WHERE status='pending'`.
 * CHECK status coherence (`accepted` ⇒ `accepted_at` and `accepted_membership_id` not null; `revoked` ⇒ `revoked_at`).
-* Column privileges: `token_hash` is **not selectable** by any client role.
+* The token hash is **not a column of this table**: it lives in `invitation_tokens` (below), a server-only table with no client grants. (Spike S-5: a column-level `REVOKE SELECT` is ineffective while a table-level grant exists, and the correct column-list grant makes `select *` fail — which is PostgREST's default shape. A split table avoids both traps.)
 * **DEL: R** — terminal invitations purged 90 days after resolution (accepted invitations keep a minimal audit trail in `audit_events`).
+
+### `invitation_tokens` (server-only)
+| Column | Type | Notes |
+|---|---|---|
+| `invitation_id` | uuid PK | → invitations ON DELETE CASCADE (1:1), plus `organisation_id` |
+| `token_hash` | bytea NOT NULL UNIQUE | SHA-256 of a 256-bit random token; the raw token is returned once by `create_invitation()` and never stored |
+RLS enabled, **no policies and no grants** to `anon`/`authenticated`; read/written only by the `SECURITY DEFINER` invitation functions. **DEL: H** with parent.
 
 ### `invitation_teams`
 | Column | Notes |
@@ -859,6 +865,7 @@ PRIMARY KEY (id, occurred_at)
 PARTITION BY RANGE (occurred_at)     -- monthly partitions
 ```
 * IDX `(organisation_id, occurred_at DESC)`; `(organisation_id, resource_type, resource_id, occurred_at DESC)`; `(organisation_id, actor_membership_id, occurred_at DESC)`; BRIN `(occurred_at)`.
+* **Partitions must exist before they are needed.** An insert with no matching partition *fails* (verified in S-7 extras), and audit writes happen inside business transactions — a missing partition would block membership changes. Mitigation: a scheduled job creates partitions ≥3 months ahead, a `DEFAULT` partition catches stragglers, and an alert fires if the default partition is non-empty.
 * Inserted only by `private.write_audit()` (called from triggers and RPCs). `INSERT/UPDATE/DELETE/TRUNCATE` revoked from all client roles; a trigger raises on UPDATE/DELETE. Retention = drop whole partitions. **DEL: X**.
 * What is audited, retained and how it is protected: [DATABASE_ARCHITECTURE.md](DATABASE_ARCHITECTURE.md) §10.
 
@@ -874,8 +881,8 @@ STD + TK. `requested_by_membership_id`, `report_kind` text, `parameters` jsonb (
 
 1. **Instants** (`starts_at`, `created_at`, `sent_at`…) are `timestamptz`, stored in UTC by Postgres, displayed by the client.
 2. **Every event table also stores `timezone`** (IANA name, e.g. `Africa/Johannesburg`) — the venue's zone, so "church-local time" is always recoverable and shown beside the viewer's local time (PRD §10/`TECHNICAL_ARCHITECTURE.md` §11).
-3. **Validation.** `private.is_valid_timezone(text)` (`STABLE`, checks `pg_timezone_names`) is used in CHECK constraints; because the tz list can change, it is also re-validated in the RPCs. App-side Zod validation uses `Intl.supportedValuesOf('timeZone')`.
-4. **Recurrence** stores *wall-clock intent*: `local_start_time` + `timezone` + `rrule`. Each occurrence's UTC instant is computed as `(occurrence_date + local_start_time) AT TIME ZONE timezone`, so a 10:00 service stays at 10:00 local across DST changes (and non-existent/ambiguous local times are resolved by a documented rule: skip-forward for gaps, first occurrence for overlaps). Generated rows are normal rows and may then be edited individually.
+3. **Validation (verified in spike S-7).** `AT TIME ZONE` also accepts abbreviations (`EST`), POSIX strings (`UTC+3`) and odd names (`Factory`), so "does not raise" is **not** validation. `private.is_valid_timezone(text)` must require `name IN (SELECT name FROM pg_timezone_names) AND (name = 'UTC' OR name ~ '^[A-Za-z]+(/[A-Za-z0-9_+-]+)+$')` and reject the `Etc/`, `posix/` and `right/` prefixes. It is used in CHECK constraints and re-validated in the RPCs. App-side Zod validation uses `Intl.supportedValuesOf('timeZone')`.
+4. **Recurrence** stores *wall-clock intent*: `local_start_time` + `timezone` + `rrule`. Each occurrence's UTC instant is computed as `(occurrence_date + local_start_time) AT TIME ZONE timezone`, so a 10:00 service stays at 10:00 local across DST changes (non-existent and ambiguous local times follow PostgreSQL's behaviour, pinned by golden tests: a local time inside a spring-forward gap is shifted forward by the gap length — 01:30 on the London change day becomes 02:30 BST; an ambiguous local time in an autumn overlap resolves to the **later, standard-time** instance). Generated rows are normal rows and may then be edited individually.
 5. **Civil values** (`date`, `time`) are used for things with no instant (`left_on`, `series starts_on`, `local_start_time`).
 6. **Ranges** use half-open semantics `[starts_at, ends_at)`; CHECK `ends_at > starts_at`.
 7. **`updated_at`** is maintained by a `BEFORE UPDATE` trigger (`private.set_updated_at`), never by the client. **Actor columns** (`created_by_*`, `recorded_by_*`) are stamped by trigger from `auth.uid()` and cannot be supplied by clients.

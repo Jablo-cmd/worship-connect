@@ -7,7 +7,7 @@ This is the entry point to the database specification. It records *what was foun
 | Document | Content |
 |---|---|
 | **DATABASE_ARCHITECTURE.md** (this file) | Findings, principles, decisions, trade-offs, risks, traceability |
-| [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) | 102-table inventory, columns, keys, constraints, indexes, time/delete policy |
+| [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) | 103-table inventory, columns, keys, constraints, indexes, time/delete policy |
 | [RLS_SECURITY_SPECIFICATION.md](RLS_SECURITY_SPECIFICATION.md) | Privileges, helper functions, per-table policy matrix, storage, realtime, RPCs |
 | [PERMISSIONS_MATRIX.md](PERMISSIONS_MATRIX.md) | Permission catalogue (45), system roles, role×permission matrix |
 | [DATABASE_MIGRATION_PLAN.md](DATABASE_MIGRATION_PLAN.md) | Phased migrations, ordering, dependencies, rollout and rollback |
@@ -241,7 +241,7 @@ Rationale: RLS can say *who may touch a row*; it cannot say *which columns* or *
 ### 10.4 Protecting sensitive records
 
 * **Split tables** for mixed-sensitivity data (unavailability reasons, decline reasons, emergency contacts, leader notes, contact details).
-* **Column privileges** for server-controlled and secret columns (`token_hash`, `status`, `organisation_id`).
+* **Column privileges** for server-controlled columns (`status`, `organisation_id`) and **server-only tables with no grants** for secrets (`invitation_tokens`) — column-level REVOKEs are not relied on (spike S-5).
 * **Permissions flagged `is_sensitive`** are always audited, excluded from default custom-role templates, and (for Owner-level actions) protected by MFA step-up.
 * **No reasons for absence/unavailability** are collected beyond what the member chooses to note privately.
 * **Encryption:** managed disk/transport encryption by the platform; push-subscription keys additionally encrypted (D-028); evaluate column-level encryption (pgsodium/Vault) for emergency contacts and leader notes — open, minimal v1 = RLS + split tables.
@@ -354,7 +354,7 @@ Legend: ✔ covered in schema/RLS · ◐ covered with a stated limitation or ope
 
 | Item | Where |
 |---|---|
-| Complete table inventory | SCHEMA §0.3 (102 tables) |
+| Complete table inventory | SCHEMA §0.3 (103 tables) |
 | Definitions, columns | SCHEMA groups A–L |
 | PK/FK, unique, check | SCHEMA per table; composite-FK pattern §0.2 |
 | Index strategy | SCHEMA §15 |
