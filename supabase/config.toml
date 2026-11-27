@@ -1,0 +1,37 @@
+# Local development / CI configuration for the Supabase CLI.
+# Production settings are managed in the Supabase dashboard, not here.
+project_id = "worship-connect"
+
+[api]
+enabled = true
+port = 54321
+# IMPORTANT: `private` and `platform` must never be exposed through the Data API.
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 17
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[realtime]
+enabled = true
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+# Local/CI only: tests sign in with synthetic users. Production keeps confirmations ON.
+enable_confirmations = false

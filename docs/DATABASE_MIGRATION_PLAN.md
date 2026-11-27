@@ -339,3 +339,59 @@ Each produces a short written result appended to this plan (or `DECISIONS.md`). 
 ### Still to run
 S-8, S-9; scoped-permission and trigger tests above; S-4 at scale on Supabase; the "not covered" list above. These remain **gates before Phase-1 exit**.
 
+
+---
+
+## 10. Phase 1 implementation status (2026-11-27)
+
+**State: implemented and verified on a development project; NOT production-ready.** Migrations, tests and CI configuration are in the repository (`supabase/`, `tests/`, `.github/workflows/database.yml`). Nothing has been deployed to a production environment.
+
+### 10.1 What exists
+
+| Item | Detail |
+|---|---|
+| Migrations | 23 files, `supabase/migrations/20261127100001…100029`. M-001…M-024 implement Phase 0–1 as planned (with the deviations below); M-025…M-029 are **corrective migrations** found by the tests (forward-only: applied migrations are never edited). |
+| Tables | 34 relations in `public`/`platform` incl. `audit_events` and 8 monthly partitions: all of Phase-1 group A, B, C, `team_memberships`, `files`, `audit_events`, `platform.*`. |
+| Seed | `supabase/seed.sql` (synthetic test users, **never production**); permission/role seed **generated** from `docs/PERMISSIONS_MATRIX.md` (`scripts/generate-permissions-seed.py --check`, negative-tested). |
+| Tests | pgTAP: `supabase/tests/database/001_catalogue.test.sql` (structural CAT-*), `002_functions_and_triggers.test.sql` (31 functional assertions). API suite: 9 Vitest files, 121 tests, real password sessions and real JWTs through PostgREST, Storage and Realtime. |
+| CI | `.github/workflows/database.yml` (static checks, `supabase start`/`db reset`/`db lint`/`test db`, API suite with a service-role fixture key, gitleaks). **Authored but never executed** — the first GitHub run is its verification. |
+
+### 10.2 Deviations from the plan above
+
+* `team_memberships` moved from Phase 2 into Phase 1 (scope helpers and invitation team pre-assignment depend on it).
+* `invitation_tokens` (server-only) replaces a `token_hash` column on `invitations` (spike S-5).
+* `service_assignment_private`, `production_plans` SC columns etc. are unchanged (later phases).
+* No `rls_matrix.yaml` yet: CAT-19 (policy coverage generated from the matrix) is **not implemented**; policy coverage is currently asserted by the hand-written suites.
+
+### 10.3 Defects found by the tests and fixed (all by corrective migrations)
+
+| Migration | Defect | Found by |
+|---|---|---|
+| M-025 | **Every function in `public`/`private`/`platform` was executable by `anon`/PUBLIC.** `M-001` revoked default function privileges per schema, which cannot remove PostgreSQL's *global* default `EXECUTE … TO PUBLIC`. Public RPCs still rejected unauthenticated callers and `anon` has no `USAGE` on `private`, so no data was exposed, but it contradicted the specification. Fix: global default revoked, blanket revoke, explicit allow-list re-grant. Also: audit partitions had no RLS of their own (a partition queried directly does not inherit the parent's policies). | CAT-03b/03c, CAT-01 |
+| M-026 | `invitation_tokens`/`invitation_teams` referenced `invitations(id)` with a single-column FK, so their `organisation_id` was not pinned to the invitation's (tenant-integrity hole). | CAT-08 |
+| M-027 | 15 foreign keys without a supporting index; `membership_contacts` lacked the `organisation_id`-immutability trigger. | CAT-10, CAT-14 |
+| M-028 | `memberships.user_id` FK covered only by a partial index. | CAT-10 |
+| M-029 | Two permissive UPDATE policies on `memberships` merged (Supabase performance advisor 0006). | advisor |
+| (spec) | `files.manage` let Owner/Admin read DM attachments and unattached files. | spike FIL-02c (Supabase) |
+
+Test-code defects found along the way (not product defects): a NUL byte in a filename, a `Blob` without a MIME type (Storage correctly enforced the bucket allow-list), a duplicate Realtime channel after a denied join, and an assertion over a status history shared across test files.
+
+### 10.4 Verification results (development project, Postgres 17, real Supabase Auth/Storage/Realtime)
+
+| Suite | Result |
+|---|---|
+| pgTAP catalogue (CAT-01…CAT-21 as implemented) | all pass after M-025…M-028 (initial run: 8 of 34 failed) |
+| pgTAP functional (`002`) | 31 / 31 |
+| API security suite | 117 passed, 4 skipped, 0 failed (the 4 skipped need a service-role fixture key and run in CI) |
+| Supabase advisors (security) | 0 errors. 13 INFO "RLS enabled, no policy" = the intended deny-all tables and partitions. 16 WARN "signed-in users can execute SECURITY DEFINER function" = the deliberate RPC surface (each validates identity inside). 1 WARN "leaked-password protection disabled" = **Auth dashboard setting, must be enabled before production**. |
+| Supabase advisors (performance) | 1 WARN fixed (M-029). INFO: 31 "unindexed foreign keys" are composite FKs whose supporting index is `(x)` or `(organisation_id, x)` rather than the exact column order the linter wants (accepted for Phase-1 volumes); unused-index notices on a fresh database. |
+| From-scratch apply | all 23 migration files apply cleanly to an empty database; seed counts 45 / 8 / 194; `anon` can execute 0 functions. |
+
+### 10.5 Not done / required before any production use
+
+1. **CI has not run.** Run it on GitHub; fix whatever it finds.
+2. **Not covered by tests yet:** signed-URL expiry and `Cache-Control`; malware scanning (no scanner exists — files never become `available` without a service-role actor); parallel double-accept of one invitation; per-user quota edge cases; Realtime behaviour for a socket that stays open across a suspension beyond the first check (only the revoke notification and fresh-join denial are tested); `platform.*` console functions beyond privilege checks; `erase_my_account()` (not implemented); retention/purge jobs (not implemented); `report_exports`, notifications and every Phase 2+ table (not created).
+3. **Operational:** separate production project, backups and a **restore drill**, monitoring/alerting (including the audit DEFAULT-partition alert and partition job), incident runbook, key-rotation drill, enabling Auth leaked-password protection and the production Auth/email settings, rate limiting at the edge for sign-in/recovery/invitation endpoints.
+4. **Review:** independent security review of every `SECURITY DEFINER` function and policy; penetration test (tenant isolation, invitations, storage, realtime); legal decisions D-016/D-033/D-040/D-043.
+5. **MFA is deferred by decision** (D-027): the `require_aal2()` hook exists and is inert.
+6. **Performance** was measured at SQL level on a local database (spike S-4); repeat on production-class hardware at realistic volumes before launch.
