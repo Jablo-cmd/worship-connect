@@ -1,2 +1,55 @@
-# worship-connect
-worship connect hub app
+# Worship Connect
+
+**A complete operating platform for worship ministries.**
+
+Worship Connect is a multi-tenant SaaS platform for churches to organise people, prepare music, coordinate services, manage rehearsals, operate technical production and communicate in one shared workspace.
+
+## Product promise
+
+**One place to organise people, prepare music, coordinate services and manage worship ministry operations.**
+
+## Product goals
+
+- Centralise worship ministry operations and communication.
+- Improve service planning, music preparation and scheduling.
+- Give every member a personalised view of assignments and commitments.
+- Coordinate worship, choir, band, audio, lighting, media and production teams.
+- Help leaders identify operational issues before service day.
+- Protect church data through tenant isolation and server-enforced permissions.
+
+## Documentation
+
+- [Product requirements](docs/PRODUCT_REQUIREMENTS.md)
+- [Technical architecture](docs/TECHNICAL_ARCHITECTURE.md)
+- [Domain model](docs/DOMAIN_MODEL.md)
+- [Security and privacy](docs/SECURITY_AND_PRIVACY.md)
+- [User workflows](docs/USER_WORKFLOWS.md)
+- [Delivery roadmap](docs/ROADMAP.md)
+- [Architecture decisions](docs/DECISIONS.md)
+
+## Initial technology direction
+
+Next.js, TypeScript, Supabase Auth, PostgreSQL, Row Level Security, Supabase Realtime, Supabase Storage, Tailwind CSS, shadcn/ui and Vercel. These are proposed choices and must be validated for compatibility, limits and cost before production.
+
+## Project status
+
+- **Stage:** Product definition and architecture
+- **Implementation:** Not yet started
+- **Specification:** Initial baseline; subject to validation
+
+Documentation describes intended behaviour; it does not mean functionality or security controls have already been implemented.
+
+## Development principles
+
+1. Design for multi-tenancy from the beginning.
+2. Enforce authorisation at server and database boundaries, never only in the UI.
+3. Keep tenant data isolated.
+4. Use migrations for database changes.
+5. Test tenant isolation before onboarding real churches.
+6. Build complete workflows rather than disconnected screens.
+7. Keep the experience responsive and accessible.
+8. Document significant architectural decisions.
+9. Avoid unnecessary dependencies and scope changes.
+10. Never commit secrets or real sensitive test data.
+
+The working product name is **Worship Connect**, matching the repository. Final brand identity remains open.
