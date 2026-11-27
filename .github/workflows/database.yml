@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # gitleaks scans the commit range; a shallow clone has no parent to diff against
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
