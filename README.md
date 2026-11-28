@@ -84,3 +84,8 @@ Documentation describes intended behaviour; it does not mean functionality or se
 10. Never commit secrets or real sensitive test data.
 
 The working product name is **Worship Connect**, matching the repository. Final brand identity remains open.
+
+## Production readiness
+
+- [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — go-live gate with honest status.
+- [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md) — release, backup/restore, incident, key rotation, audit partitions.
