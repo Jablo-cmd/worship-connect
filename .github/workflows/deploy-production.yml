@@ -1,5 +1,8 @@
 # Production database release. Manual only; the `production` GitHub Environment MUST be configured with
 # required reviewers (Settings > Environments) so nothing reaches production without an explicit approval.
+# Production project: worship-connect-prod (ref vkgxsfnhjmolkntreoqo). Initial schema was applied via the Supabase tools on
+# 2026-11-28 (migrations 001-030 recorded under their own timestamps), so the first CLI `db push` may report history drift:
+# run `supabase migration repair` per the dry-run output before the first real release.
 # Applies ONLY supabase/migrations. It never runs seed.sql, scripts/reset-test-data.sql or the API test suite
 # against production (those create/delete synthetic users and are dev/test only).
 name: deploy-production

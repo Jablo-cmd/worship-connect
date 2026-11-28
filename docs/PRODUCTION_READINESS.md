@@ -24,14 +24,14 @@ Legend: ✅ done and verified · 🟡 done in repo, needs environment action · 
 ## B. Operations (environment)
 | # | Item | Status |
 |---|------|--------|
-| B1 | Separate production Supabase project (not `worship-hub`) | ⬜ |
+| B1 | Separate production Supabase project (not `worship-hub`) | ✅ `worship-connect-prod` (ref `vkgxsfnhjmolkntreoqo`, eu-west-2, Auris Nexus org) created 2026-11-28; all 24 migrations applied; verified against dev: 34 tables / 0 without RLS, 50 policies, 56 functions with identical definitions, 61 triggers, 133 indexes, anon executes 0 functions and holds 0 grants; security advisor: 0 errors (13 INFO RLS-no-policy = intended deny-all tables, 16 WARN = intended `authenticated` RPCs); 0 users/orgs (no demo or test data) |
 | B2 | Backups + PITR enabled; **restore drill performed** (RUNBOOKS §2) | ⬜ |
 | B3 | Monitoring/alerting: audit DEFAULT-partition, partition job, auth errors, 5xx, latency (RUNBOOKS §5) | ⬜ |
 | B4 | Auth: leaked-password protection ON, email confirmation ON, production SMTP/templates, rate limits, CAPTCHA on sign-up/recovery | ⬜ |
 | B5 | Edge rate limiting for sign-in, recovery and invitation endpoints | ⬜ |
 | B6 | Key-rotation drill (RUNBOOKS §4) | ⬜ |
 | B7 | Incident runbook rehearsed (tabletop of RUNBOOKS §3) | ⬜ |
-| B8 | Data API exposes only `public` + `graphql_public` on production (verify in dashboard) | ⬜ |
+| B8 | Data API exposes only `public` + `graphql_public` on production (verify in dashboard) | ⬜ (default for new projects; confirm in dashboard) |
 | B9 | Dev project `worship-hub` kept separate; no production data in dev, no synthetic users in production | ✅ rule / ⬜ verify at launch |
 
 ## C. Assurance and legal
